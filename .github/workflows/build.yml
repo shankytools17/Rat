@@ -29,12 +29,41 @@ jobs:
       - name: Install Linux dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y git zip unzip openjdk-17-jdk python3-pip python3-dev build-essential autoconf automake libtool pkg-config cmake ninja-build libffi-dev libssl-dev zlib1g-dev libsqlite3-dev liblzma-dev libncurses-dev
+          sudo apt-get install -y git zip unzip openjdk-17-jdk python3-pip python3-dev build-essential autoconf automake libtool libtool-bin pkg-config cmake ninja-build libffi-dev libssl-dev zlib1g-dev libsqlite3-dev liblzma-dev libncurses-dev
 
-      - name: Install Buildozer without virtualenv
+      - name: Install Buildozer
         run: |
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           python3 -m pip install --user --break-system-packages --upgrade buildozer 'cython==0.29.34' 'setuptools<81' wheel
+
+      - name: Patch python-for-android libffi autoreconf compatibility
+        shell: bash
+        run: |
+          set -euo pipefail
+          P4A_DIR="$GITHUB_WORKSPACE/.buildozer/android/platform/python-for-android"
+          mkdir -p "$(dirname "$P4A_DIR")"
+          git clone --depth 1 --branch master https://github.com/kivy/python-for-android.git "$P4A_DIR"
+          export P4A_DIR
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          recipe = Path(os.environ['P4A_DIR']) / 'pythonforandroid/recipes/libffi/__init__.py'
+          content = recipe.read_text()
+          needle = "shprint(sh.Command('./autogen.sh'), _env=env)"
+          if content.count(needle) != 1:
+              raise SystemExit('libffi recipe changed; refusing unsafe patch')
+          patch = '''# Work around undefined LT_SYS_SYMBOL_USCORE on modern libtool/autoconf.
+                  from pathlib import Path
+                  config = Path('configure.ac')
+                  if config.exists():
+                      data = config.read_text()
+                      if 'LT_SYS_SYMBOL_USCORE' in data:
+                          config.write_text(data.replace('LT_SYS_SYMBOL_USCORE', 'm4_ifdef([LT_SYS_SYMBOL_USCORE], [LT_SYS_SYMBOL_USCORE])'))
+                  '''
+          content = content.replace(needle, patch + needle)
+          recipe.write_text(content)
+          print('Patched libffi recipe:', recipe)
+          PY
 
       - name: Build APK
         env:
