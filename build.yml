@@ -1,0 +1,52 @@
+name: Build Android APK
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'main.py'
+      - 'buildozer.spec'
+      - '.github/workflows/build.yml'
+      - '**/*.kv'
+      - 'assets/**'
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify project
+        run: |
+          test -f main.py || { echo 'ERROR: Upload your actual Kivy app as main.py at repository root'; exit 1; }
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git zip unzip openjdk-17-jdk python3-pip python3-venv python3-dev build-essential autoconf automake libtool pkg-config cmake ninja-build libffi-dev libssl-dev zlib1g-dev libsqlite3-dev liblzma-dev libncurses-dev libtinfo6
+      - name: Set up Buildozer
+        run: |
+          python3 -m venv "$HOME/buildozer-venv"
+          "$HOME/buildozer-venv/bin/pip" install --upgrade pip setuptools wheel
+          "$HOME/buildozer-venv/bin/pip" install buildozer cython==0.29.34
+      - name: Build APK
+        env:
+          JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
+        run: |
+          export PATH="$HOME/buildozer-venv/bin:$PATH"
+          yes | buildozer -v android debug 2>&1 | tee build.log
+          test ${PIPESTATUS[0]} -eq 0
+      - name: Upload APK
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-debug-apk
+          path: bin/*.apk
+          if-no-files-found: error
+      - name: Upload failure log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-failure-log
+          path: build.log
+          if-no-files-found: ignore
