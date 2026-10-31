@@ -2,15 +2,17 @@ name: Build Android APK
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
+
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Check required files
@@ -18,60 +20,203 @@ jobs:
           test -f main.py
           test -f buildozer.spec
 
-      - name: Install Linux dependencies
+      - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y git zip unzip openjdk-17-jdk python3-pip python3-dev build-essential autoconf automake libtool libtool-bin pkg-config cmake ninja-build libffi-dev libssl-dev zlib1g-dev libsqlite3-dev liblzma-dev libncurses-dev
+
+          sudo apt-get install -y \
+            git \
+            zip \
+            unzip \
+            openjdk-17-jdk \
+            python3-pip \
+            python3-dev \
+            build-essential \
+            autoconf \
+            automake \
+            libtool \
+            libtool-bin \
+            pkg-config \
+            cmake \
+            ninja-build \
+            libffi-dev \
+            libssl-dev \
+            zlib1g-dev \
+            libsqlite3-dev \
+            liblzma-dev \
+            libncurses-dev
 
       - name: Install Buildozer
         run: |
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          python3 -m pip install --user --break-system-packages --upgrade buildozer 'cython==0.29.34' 'setuptools<81' wheel
 
-      - name: Patch libffi recipe and validate Python syntax
+          python3 -m pip install \
+            --user \
+            --break-system-packages \
+            --upgrade \
+            buildozer \
+            'cython==0.29.34' \
+            'setuptools<81' \
+            wheel
+
+      - name: Fix Android dependencies
         shell: bash
         run: |
           set -euo pipefail
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import configparser
+          import re
+
+          spec = Path("buildozer.spec")
+
+          if not spec.exists():
+              raise SystemExit("buildozer.spec not found")
+
+          parser = configparser.ConfigParser(
+              interpolation=None
+          )
+
+          parser.read(spec)
+
+          requirements = [
+              item.strip()
+              for item in parser.get(
+                  "app", "requirements"
+              ).split(",")
+              if item.strip()
+          ]
+
+          requirements = [
+              item for item in requirements
+              if not re.match(
+                  r"^charset[-_]normalizer(?:[<>=!~\[]|$)",
+                  item,
+                  re.IGNORECASE
+              )
+          ]
+
+          requirements.append(
+              "charset-normalizer==3.3.2"
+          )
+
+          new_value = ",".join(requirements)
+
+          content = spec.read_text()
+
+          content, count = re.subn(
+              r"(?m)^\s*requirements\s*=.*$",
+              "requirements = " + new_value,
+              content,
+              count=1
+          )
+
+          if count != 1:
+              raise SystemExit(
+                  "Could not update requirements"
+              )
+
+          spec.write_text(content)
+
+          print("Requirements:", new_value)
+          PY
+
+      - name: Patch libffi recipe
+        shell: bash
+        run: |
+          set -euo pipefail
+
           P4A_DIR="$GITHUB_WORKSPACE/.buildozer/android/platform/python-for-android"
+
           mkdir -p "$(dirname "$P4A_DIR")"
-          git clone --depth 1 --branch master https://github.com/kivy/python-for-android.git "$P4A_DIR"
+
+          git clone \
+            --depth 1 \
+            --branch master \
+            https://github.com/kivy/python-for-android.git \
+            "$P4A_DIR"
+
           export P4A_DIR
+
           python3 - <<'PY'
           import ast
           import os
           from pathlib import Path
-          recipe = Path(os.environ['P4A_DIR']) / 'pythonforandroid/recipes/libffi/__init__.py'
-          original = recipe.read_text()
-          lines = original.splitlines(keepends=True)
-          target = "shprint(sh.Command('./autogen.sh'), _env=env)"
-          matches = [i for i, line in enumerate(lines) if target in line]
+
+          recipe = (
+              Path(os.environ["P4A_DIR"])
+              / "pythonforandroid/recipes/libffi/__init__.py"
+          )
+
+          lines = recipe.read_text().splitlines(
+              keepends=True
+          )
+
+          target = (
+              "shprint(sh.Command('./autogen.sh'), _env=env)"
+          )
+
+          matches = [
+              i for i, line in enumerate(lines)
+              if target in line
+          ]
+
           if len(matches) != 1:
-              raise SystemExit('libffi recipe changed: refusing unsafe patch')
+              raise SystemExit(
+                  "libffi recipe layout changed"
+              )
+
           idx = matches[0]
-          indent = lines[idx][:len(lines[idx]) - len(lines[idx].lstrip())]
+
+          indent = lines[idx][
+              :len(lines[idx]) -
+              len(lines[idx].lstrip())
+          ]
+
           patch = [
-              '# Work around missing LT_SYS_SYMBOL_USCORE macro in libffi configure.ac',
-              'from pathlib import Path',
+              "from pathlib import Path",
               "config = Path('configure.ac')",
-              'if config.is_file():',
-              '    data = config.read_text()',
+              "if config.is_file():",
+              "    data = config.read_text()",
               "    if 'LT_SYS_SYMBOL_USCORE' in data:",
               "        config.write_text(data.replace('LT_SYS_SYMBOL_USCORE', 'm4_ifdef([LT_SYS_SYMBOL_USCORE], [LT_SYS_SYMBOL_USCORE])'))",
           ]
-          # Insert at exactly the same indentation level as autogen.sh.
-          lines[idx:idx] = [indent + statement + '\n' for statement in patch]
-          modified = ''.join(lines)
-          ast.parse(modified, filename=str(recipe))
-          compile(modified, str(recipe), 'exec')
+
+          lines[idx:idx] = [
+              indent + statement + "\n"
+              for statement in patch
+          ]
+
+          modified = "".join(lines)
+
+          ast.parse(
+              modified,
+              filename=str(recipe)
+          )
+
+          compile(
+              modified,
+              str(recipe),
+              "exec"
+          )
+
           recipe.write_text(modified)
-          print('libffi recipe patched; Python syntax validated')
+
+          print("libffi patch syntax OK")
           PY
 
       - name: Build APK
+        shell: bash
+        env:
+          PIP_NO_BINARY: charset-normalizer
         run: |
-          export PATH="$HOME/.local/bin:$PATH"
           set -o pipefail
-          buildozer -v android debug 2>&1 | tee build-output.log
+
+          export PATH="$HOME/.local/bin:$PATH"
+
+          buildozer -v android debug \
+            2>&1 | tee build-output.log
 
       - name: Upload APK
         if: success()
@@ -81,7 +226,7 @@ jobs:
           path: bin/*.apk
           if-no-files-found: error
 
-      - name: Upload build log on failure
+      - name: Upload build log
         if: failure()
         uses: actions/upload-artifact@v4
         with:
