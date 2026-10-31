@@ -2,8 +2,7 @@ name: Build Android APK
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   workflow_dispatch:
 
 jobs:
@@ -15,36 +14,16 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Check required files
-        run: |
-          test -f main.py
-          test -f buildozer.spec
-
       - name: Install system dependencies
         run: |
           sudo apt-get update
-
           sudo apt-get install -y \
-            git \
-            zip \
-            unzip \
-            openjdk-17-jdk \
-            python3-pip \
-            python3-dev \
-            build-essential \
-            autoconf \
-            automake \
-            libtool \
-            libtool-bin \
-            pkg-config \
-            cmake \
-            ninja-build \
-            libffi-dev \
-            libssl-dev \
-            zlib1g-dev \
-            libsqlite3-dev \
-            liblzma-dev \
-            libncurses-dev
+            git zip unzip openjdk-17-jdk \
+            python3-pip python3-dev build-essential \
+            autoconf automake libtool libtool-bin \
+            pkg-config cmake ninja-build \
+            libffi-dev libssl-dev zlib1g-dev \
+            libsqlite3-dev liblzma-dev libncurses-dev
 
       - name: Install Buildozer
         run: |
@@ -59,70 +38,17 @@ jobs:
             'setuptools<81' \
             wheel
 
-      - name: Fix Android dependencies
-        shell: bash
+      - name: Set dependency constraint
         run: |
-          set -euo pipefail
+          echo 'charset-normalizer==3.3.2' \
+            > "$RUNNER_TEMP/p4a-constraints.txt"
 
-          python3 - <<'PY'
-          from pathlib import Path
-          import configparser
-          import re
+          echo "PIP_CONSTRAINT=$RUNNER_TEMP/p4a-constraints.txt" \
+            >> "$GITHUB_ENV"
 
-          spec = Path("buildozer.spec")
+          cat "$RUNNER_TEMP/p4a-constraints.txt"
 
-          if not spec.exists():
-              raise SystemExit("buildozer.spec not found")
-
-          parser = configparser.ConfigParser(
-              interpolation=None
-          )
-
-          parser.read(spec)
-
-          requirements = [
-              item.strip()
-              for item in parser.get(
-                  "app", "requirements"
-              ).split(",")
-              if item.strip()
-          ]
-
-          requirements = [
-              item for item in requirements
-              if not re.match(
-                  r"^charset[-_]normalizer(?:[<>=!~\[]|$)",
-                  item,
-                  re.IGNORECASE
-              )
-          ]
-
-          requirements.append(
-              "charset-normalizer==3.3.2"
-          )
-
-          new_value = ",".join(requirements)
-
-          content = spec.read_text()
-
-          content, count = re.subn(
-              r"(?m)^\s*requirements\s*=.*$",
-              "requirements = " + new_value,
-              content,
-              count=1
-          )
-
-          if count != 1:
-              raise SystemExit(
-                  "Could not update requirements"
-              )
-
-          spec.write_text(content)
-
-          print("Requirements:", new_value)
-          PY
-
-      - name: Patch libffi recipe
+      - name: Prepare python-for-android and patch libffi
         shell: bash
         run: |
           set -euo pipefail
@@ -139,7 +65,7 @@ jobs:
 
           export P4A_DIR
 
-          python3 - <<'PY'
+          python3 - <<'PYCODE'
           import ast
           import os
           from pathlib import Path
@@ -184,32 +110,21 @@ jobs:
           ]
 
           lines[idx:idx] = [
-              indent + statement + "\n"
+              indent + statement + chr(10)
               for statement in patch
           ]
 
           modified = "".join(lines)
 
-          ast.parse(
-              modified,
-              filename=str(recipe)
-          )
-
-          compile(
-              modified,
-              str(recipe),
-              "exec"
-          )
+          ast.parse(modified)
 
           recipe.write_text(modified)
 
           print("libffi patch syntax OK")
-          PY
+          PYCODE
 
       - name: Build APK
         shell: bash
-        env:
-          PIP_NO_BINARY: charset-normalizer
         run: |
           set -o pipefail
 
@@ -233,4 +148,3 @@ jobs:
           name: build-log
           path: build-output.log
           if-no-files-found: ignore
-          
